@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VV Merry Christmas 3D Tree</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505; /* 深色背景衬托光芒 */
+            font-family: 'Times New Roman', serif; /* 衬线体 */
+        }
+        #title-container {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: #FFD700; /* 金色文字 */
+            z-index: 10;
+            pointer-events: none; /* 防止文字挡住鼠标点击事件 */
+        }
+        h1 {
+            margin: 0;
+            font-size: 3rem;
+            letter-spacing: 5px;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+        }
+        #loading {
+           position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+           color: gold; font-family: sans-serif; z-index: 20;
+        }
+    </style>
+    </head>
+<body>
+
+    <div id="title-container">
+        <h1>VV MERRY CHRISTMAS</h1>
+    </div>
+    <div id="loading">Loading Christmas Magic...</div>
+    
+    <audio id="bgm" loop preload="auto">
+        <source src="bgm.mp3" type="audio/mpeg">
+    </audio>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 配置 ---
+        const COUNT = 4500; // 几何体总数
+        const TREE_HEIGHT = 60;
+        const TREE_RADIUS = 25;
+        // 폰트 URL 및 텍스트 관련 변수 제거됨
+        const HDR_URL = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/royal_esplanade_1k.hdr';
+
+        // 颜色定义
+        const COLOR_GOLD = new THREE.Color(0xFFD700);
+        const COLOR_RED = new THREE.Color(0xDC143C);
+        const COLOR_GREEN = new THREE.Color(0x006400);
+
+        let scene, camera, renderer, controls, composer;
+        let instancedSpheres, instancedCubes, treeTopper;
+        let treeGroup = new THREE.Group();
+        let snowSystem, snowGeo; // 눈 시스템 변수
+
+        // 存储位置数据 (只保留树的)
+        let treePositions = [];
+
+        // --- 初始化 ---
+        async function init() {
+            scene = new THREE.Scene();
+            // 안개 추가 (눈 내리는 분위기 강화)
+            scene.fog = new THREE.FogExp2(0x050505, 0.002);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+            camera.position.set(0, 30, 120);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.2;
+            document.body.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.autoRotate = false;
+            controls.enablePan = false;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+            scene.add(ambientLight);
+
+            const mainLight = new THREE.PointLight(COLOR_GOLD, 2, 200);
+            mainLight.position.set(20, 50, 30);
+            scene.add(mainLight);
+            
+            await loadResourcesAndGeneratePoints();
+
+            createInstancedMeshes();
+            createTopper();
+            scene.add(treeGroup);
+
+            // 눈 내리는 효과 생성
+            createSnow();
+
+            setupPostProcessing();
+
+            window.addEventListener('resize', onWindowResize);
+            // 클릭 시 음악 재생 인터랙션으로 변경
+            window.addEventListener('click', playMusic); 
+            window.addEventListener('touchstart', playMusic, {passive: false});
+
+            document.getElementById('loading').style.display = 'none';
+            animate();
+        }
+
+        // --- 资源加载与点位生成 ---
+        async function loadResourcesAndGeneratePoints() {
+            const rgbeLoader = new RGBELoader();
+            const texture = await new Promise(resolve => rgbeLoader.load(HDR_URL, resolve));
+
+            texture.mapping = THREE.EquirectangularReflectionMapping;
+            scene.environment = texture;
+
+            // 1. 생성할 포인트 수 설정 (글자 변환이 없으므로 COUNT 사용)
+            const actualCount = COUNT;
+
+            // 2. 생성 트리형 포인트 데이터
+            treePositions = generateTreePoints(actualCount);
+        }
+
+        // 생성 圆锥树形态的点数据 (유지)
+        function generateTreePoints(numPoints) {
+            let points = [];
+            for (let i = 0; i < numPoints; i++) {
+                const ratio = i / numPoints;
+                const y = -TREE_HEIGHT / 2 + ratio * TREE_HEIGHT;
+                const radius = (1 - ratio) * TREE_RADIUS * (0.8 + Math.random() * 0.4); 
+                const angle = Math.random() * Math.PI * 2;
+
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                points.push(x, y, z);
+            }
+            return new Float32Array(points);
+        }
+
+        // --- 생성 InstancedMesh (유지, currentPositions 대신 treePositions 직접 사용) ---
+        function createInstancedMeshes() {
+            const totalCount = treePositions.length / 3;
+            
+            const sphereMat = new THREE.MeshPhysicalMaterial({
+                metalness: 0.9, roughness: 0.1, envMapIntensity: 1.5
+            });
+            const cubeMat = new THREE.MeshPhysicalMaterial({
+                metalness: 0.8, roughness: 0.2, envMapIntensity: 1.2
+            });
+
+            const sphereGeo = new THREE.SphereGeometry(0.8, 16, 16);
+            const cubeGeo = new THREE.BoxGeometry(1.2, 1.2, 1.2);
+
+            instancedSpheres = new THREE.InstancedMesh(sphereGeo, sphereMat, totalCount);
+            instancedCubes = new THREE.InstancedMesh(cubeGeo, cubeMat, totalCount);
+
+            const dummy = new THREE.Object3D();
+            const color = new THREE.Color();
+
+            for (let i = 0; i < totalCount; i++) {
+                // treePositions를 직접 사용하여 위치 설정
+                dummy.position.set(treePositions[i*3], treePositions[i*3+1], treePositions[i*3+2]);
+                const scale = Math.random() * 0.8 + 0.5;
+                dummy.scale.set(scale, scale, scale);
+                dummy.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+                dummy.updateMatrix();
+
+                if (Math.random() > 0.4) {
+                    instancedSpheres.setMatrixAt(i, dummy.matrix);
+                    color.set(Math.random() > 0.3 ? COLOR_GOLD : COLOR_RED);
+                    color.offsetHSL(0, 0, (Math.random() - 0.5) * 0.1);
+                    instancedSpheres.setColorAt(i, color);
+                    instancedCubes.setMatrixAt(i, new THREE.Matrix4().set(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0));
+                } else {
+                    instancedCubes.setMatrixAt(i, dummy.matrix);
+                    color.set(Math.random() > 0.5 ? COLOR_GOLD : COLOR_GREEN);
+                    color.offsetHSL(0, 0, (Math.random() - 0.5) * 0.1);
+                    instancedCubes.setColorAt(i, color);
+                    instancedSpheres.setMatrixAt(i, new THREE.Matrix4().set(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0));
+                }
+            }
+
+            treeGroup.add(instancedSpheres);
+            treeGroup.add(instancedCubes);
+        }
+
+        // 생성 树顶装饰 (유지)
+        function createTopper() {
+            const geometry = new THREE.OctahedronGeometry(4, 0);
+            const material = new THREE.MeshStandardMaterial({
+                color: COLOR_GOLD,
+                emissive: COLOR_GOLD,
+                emissiveIntensity: 2,
+                metalness: 1.0,
+                roughness: 0.0
+            });
+            treeTopper = new THREE.Mesh(geometry, material);
+            treeTopper.position.set(0, TREE_HEIGHT / 2 + 2, 0);
+            treeGroup.add(treeTopper);
+
+            const topperLight = new THREE.PointLight(COLOR_GOLD, 3, 50);
+            topperLight.position.copy(treeTopper.position);
+            treeGroup.add(topperLight);
+        }
+
+        // --- 눈 내리는 효과 생성 함수 (신규 추가) ---
+        function createSnow() {
+            const snowCount = 2000;
+            snowGeo = new THREE.BufferGeometry();
+            const positions = [];
+            const velocities = []; // 각 눈송이의 속도 저장
+
+            for(let i=0; i<snowCount; i++) {
+                // 넓은 범위에 랜덤하게 배치
+                positions.push(
+                    Math.random() * 200 - 100, // x
+                    Math.random() * 200 - 50,  // y (위쪽에서 시작)
+                    Math.random() * 200 - 100  // z
+                );
+                // 낙하 속도 및 횡이동 속도 랜덤 설정
+                velocities.push(
+                    (Math.random() - 0.5) * 0.1, // x축 흔들림
+                    Math.random() * 0.2 + 0.1,   // y축 낙하 속도
+                    (Math.random() - 0.5) * 0.1  // z축 흔들림
+                );
+            }
+
+            snowGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            snowGeo.userData.velocities = velocities; // 속도 정보를 geometry에 저장
+
+            // 눈송이 텍스처 (Base64 인코딩된 간단한 원형 그라데이션)
+            const canvas = document.createElement('canvas');
+            canvas.width = 32; canvas.height = 32;
+            const context = canvas.getContext('2d');
+            const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(0.5, 'rgba(255,255,255,0.8)');
+            gradient.addColorStop(1, 'rgba(255,255,255,0)');
+            context.fillStyle = gradient;
+            context.fillRect(0,0,32,32);
+            const snowTexture = new THREE.CanvasTexture(canvas);
+
+            const snowMat = new THREE.PointsMaterial({
+                size: 1.5,
+                map: snowTexture,
+                transparent: true,
+                opacity: 0.8,
+                vertexColors: false,
+                color: 0xffffff,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false // 눈이 다른 물체를 가리지 않게
+            });
+
+            snowSystem = new THREE.Points(snowGeo, snowMat);
+            scene.add(snowSystem);
+        }
+
+
+        // --- 后期处理 (Bloom 辉光) (유지) ---
+        function setupPostProcessing() {
+            const renderScene = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.8, 0.5, 0.85);
+            
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+        }
+
+
+        // --- 交互与动画 ---
+        // 기존 toggleState 제거하고 playMusic으로 대체
+        function playMusic(e) {
+            const bgm = document.getElementById('bgm');
+            if (bgm.paused) {
+                bgm.play().then(() => console.log("Music started playing"))
+                .catch(err => console.log("Music autoplay blocked:", err));
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            // 트리 항상 느리게 자전
+            treeGroup.rotation.y += 0.002;
+            if (treeTopper) treeTopper.rotation.y -= 0.02;
+
+            // 눈 애니메이션 업데이트
+            if (snowGeo && snowGeo.attributes.position) {
+                const positions = snowGeo.attributes.position.array;
+                const velocities = snowGeo.userData.velocities;
+                for(let i=0; i<positions.length / 3; i++) {
+                    // Y축 위치 업데이트 (낙하)
+                    positions[i*3 + 1] -= velocities[i*3 + 1];
+                    // X, Z축 약간 흔들림
+                    positions[i*3] += velocities[i*3];
+                    positions[i*3 + 2] += velocities[i*3 + 2];
+
+                    // 바닥에 닿으면 다시 위로 올림 (무한 반복)
+                    if (positions[i*3 + 1] < -60) {
+                        positions[i*3 + 1] = 100;
+                        positions[i*3] = Math.random() * 200 - 100;
+                        positions[i*3 + 2] = Math.random() * 200 - 100;
+                    }
+                }
+                snowGeo.attributes.position.needsUpdate = true;
+                // 눈 시스템도 트리와 함께 천천히 회전시켜 입체감 부여
+                snowSystem.rotation.y += 0.001;
+            }
+
+            composer.render();
+        }
+
+        init();
+    </script>
+</body>
+</html>
